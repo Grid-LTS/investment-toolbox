@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "finanzen"
+name = "investment toolbox"
 version = "0.1.0"
 description = ""
 authors = ["Gerd Friemel <gerd.friemel@friemel-tech.de>"]
@@ -8,6 +8,7 @@ authors = ["Gerd Friemel <gerd.friemel@friemel-tech.de>"]
 python = ">=3.8,<3.11"
 scipy = "^1.8.0"
 configparser = "^5.3.0"
+numpy = "^1.23.2"
 
 [tool.poetry.dev-dependencies]
 

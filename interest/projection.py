@@ -91,7 +91,7 @@ configParser.read(properties_path)
 
 years = configParser.get('parameters', 'years', fallback=None)
 if not years:
-    years = input("How many years should the fund be project?: ")
+    years = input("How many years should the fund-fit be project?: ")
     print()
 years = int(years)
 dynamic_factor = configParser.get('parameters', 'dynamic_factor', fallback=None)
