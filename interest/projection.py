@@ -15,6 +15,7 @@ class Fond:
         self.invested = []
         self.projected = []
         self.interests = []
+        self.current_year = None
         self.filedir = osp.join(osp.dirname(osp.realpath(__file__)), "sheets")
 
     def load_sheet(self):
@@ -22,6 +23,7 @@ class Fond:
         with open(data_file_path, newline='') as datasheet:
             reader = csv.DictReader(datasheet)
             total_eingezahlt = 0
+            year = None
             for row in reader:
                 row_data = []
                 eingezahlt = float(row['Eingezahlt'])
@@ -30,7 +32,9 @@ class Fond:
                 self.invested.append(eingezahlt)
                 row_data.append(float(row['Wert']))
                 row_data.append(total_eingezahlt)
+                year = row['Jahr']
                 self.rows.append(row_data)
+            self.current_year = year
 
     @staticmethod
     def zinsZins(invested, r):
@@ -59,7 +63,7 @@ class Fond:
         total_eingezahlt = self.rows[-1][-1]
         yearly_rate = self.rows[-1][0]
         r = interest + 1
-        data_file_path = osp.join(self.filedir, f"Projected-{'{:.5f}'.format(interest)}.csv")
+        data_file_path = osp.join(self.filedir, f"Projected-{self.current_year}-{'{:.5f}'.format(interest)}.csv")
         with open(data_file_path, 'w', encoding='UTF8') as f:
             writer = csv.writer(f)
             header = ['Eingezahlt', 'Wert', 'Total Eingezahlt']
