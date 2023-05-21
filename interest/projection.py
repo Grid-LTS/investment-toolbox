@@ -18,6 +18,12 @@ class Fond:
         self.interests = []
         self.net_cash_flows = []
         self.current_year = None
+        self.chart_name = chart_name
+        if '-y' in chart_name or '-yealy' in chart_name:
+            self.monthly = False
+        else:
+            self.monthly = True
+        self.initial_investment = 0
         self.filedir = osp.join(osp.dirname(osp.realpath(__file__)), "sheets")
         self.sheet_path = osp.join(self.filedir, f"{chart_name}.csv")
 
@@ -37,19 +43,30 @@ class Fond:
                 if year == 0:
                     first_saving = float(row['saving'])
                     total_saving += first_saving
-                    self.initial_investment = first_saving
+                    if first_saving:
+                        self.initial_investment = first_saving
                     continue
                 row_data = []
                 saving = float(row['saving'])
                 total_saving += saving
                 row_data.append(saving)
                 self.invested.append(saving)
-                total_value = float(row['total_value'])
-                # do not count saving; will be implicetly include  in the next period
-                net_cash_flow = - saving # one saving corresponds to cashflow (cash in)
+                if self.monthly:
+                    # the savings over the year (virtually) booked at the end of the year and not subject for return
+                    # therefore they should not be included in the final cashflow-out which is total value
+                    cash_value = float(row['total_value']) - saving
+                else:
+                    # in a yearly savings regime the complete cashflow-out does not contain the new savings for the next
+                    # period
+                    cash_value = float(row['total_value'])
+                """
+                distribute cashflow equally between years
+                """
+                net_cash_flow = - saving
                 self.net_cash_flows.append(net_cash_flow)
-                row_data.append(total_value)
+                row_data.append(cash_value)
                 row_data.append(total_saving)
+                row_data.append(float(row['total_value']))
                 self.rows.append(row_data)
             self.current_year = year
 
@@ -73,7 +90,11 @@ class Fond:
 
     def solver_irr(self, ncf):
         func = lambda r: Fond.weighted_cashflow(ncf, r) - self.initial_investment
-        irr_initial_guess = 1.1
+        sum = reduce(lambda x, y: abs(y) + x, ncf[:-1],0)
+        if sum > ncf[-1]:
+            irr_initial_guess = 0.9
+        else:
+            irr_initial_guess = 1.1
         irr_solution = fsolve(func, np.array([irr_initial_guess], np.double))
         return irr_solution[0]
 
@@ -83,16 +104,21 @@ class Fond:
             ncf = list(self.net_cash_flows[:i+1])
             ncf[-1] = self.rows[i][1] # cash out, equals the total portfolio value for that year
             print(f"cash-flow-out/total value for year {i+1}: {ncf[-1]}")
-            if self.rows[i][1] == self.rows[i][2]:
-                interest = 1
+            if self.rows[i][3] == self.rows[i][2]:
+                interest = 0
             else:
                 interest = np.round(self.solver_irr(ncf), DECIMAL_PRECISION).item() - 1
+            self.rows[i].append(interest)
             self.interests.append(interest)
 
     def save_results(self):
-        pass
-
-
+        headers = ['interest']
+        outdir = osp.join(self.filedir, 'out')
+        out = osp.join(outdir, f"{self.chart_name}.csv")
+        with open(out, "w+") as write_sheet:
+            write_sheet.write(";".join(headers) + "\n")
+            for interest in self.interests:
+                write_sheet.write('{:.4f}'.format(interest) + "\n")
 
     def project(self, dynamic_factor, years):
         interest = self.interests[-1]
@@ -119,9 +145,17 @@ class Fond:
 
     def calculate(self):
         fond.calc_avg_interest()
-        current_interest = fond.interests[-1]
+        current_interest = self.interests[-1]
         print("Current internal rate of return: " + '{:.5f}'.format(current_interest))
+        portfolio = self.consistency_check()
+        print("Plausibility analysis, current portfolio value assumung this constant interest: " + '{:.5f}'.format(portfolio))
 
+    def consistency_check(self):
+        interest = self.interests[-1]
+        portfolio = self.initial_investment
+        for row in self.rows:
+            portfolio = portfolio * (interest + 1) + row[0]
+        return portfolio
 
 top_package_dir = osp.dirname(osp.abspath(__file__))
 properties_path = osp.join(top_package_dir, 'parameters.cfg')
@@ -143,5 +177,5 @@ else:
 
 fond = Fond(configParser.get('parameters', 'chartname', fallback=""))
 fond.calculate()
-fond.project(dynamic_factor, years)
-fond.save_irr()
+#fond.project(dynamic_factor, years)
+fond.save_results()
