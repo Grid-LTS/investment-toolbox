@@ -9,8 +9,9 @@ from scipy.optimize import fsolve
 DECIMAL_PRECISION = 5
 DELIMITER = ';'
 
+
 class Fond:
-    def __init__(self, chart_name):
+    def __init__(self, chart_name, early_booking=False):
         self.rows = []
         self.headers = None
         self.invested = []
@@ -24,6 +25,7 @@ class Fond:
         else:
             self.monthly = True
         self.initial_investment = 0
+        self.early_booking = early_booking
         self.filedir = osp.join(osp.dirname(osp.realpath(__file__)), "sheets")
         self.sheet_path = osp.join(self.filedir, f"{chart_name}.csv")
 
@@ -32,7 +34,9 @@ class Fond:
             reader = csv.DictReader(datasheet, delimiter=DELIMITER)
             year = None
             total_saving = 0
-            for row in reader:
+            readings = list(reader)
+            readings = [x for x in readings if not (x['year'].startswith('#') or not x['year'])]
+            for index, row in enumerate(readings):
                 if not row['year']:
                     continue
                 if row['year'].startswith('#'):
@@ -49,20 +53,28 @@ class Fond:
                 row_data = []
                 saving = float(row['saving'])
                 total_saving += saving
-                row_data.append(saving)
                 self.invested.append(saving)
+                if index == 1 and self.early_booking:
+                    self.initial_investment += saving
                 if self.monthly:
-                    # the savings over the year (virtually) booked at the end of the year and not subject for return
-                    # therefore they should not be included in the final cashflow-out which is total value
-                    cash_value = float(row['total_value']) - saving
+                    if not self.early_booking:
+                        # the savings over the year (virtually) booked at the end of the year and not subject for return
+                        # therefore they should not be included in the final cashflow-out which is total value
+                        cash_value = float(row['total_value']) - saving
+                    else:
+                        # saving were booked at the beginning of the interest period, therefore total value equals the
+                        # cashflow
+                        cash_value = float(row['total_value'])
                 else:
                     # in a yearly savings regime the complete cashflow-out does not contain the new savings for the next
                     # period
-                    cash_value = float(row['total_value'])
-                """
-                distribute cashflow equally between years
-                """
-                net_cash_flow = - saving
+                    cash_value = float(row['total_value']) - saving
+                if index < len(readings) - 1:
+                    if self.early_booking:
+                        net_cash_flow = - float(readings[index + 1]['saving'])
+                    else:
+                        net_cash_flow = - saving
+                row_data.append(saving)
                 self.net_cash_flows.append(net_cash_flow)
                 row_data.append(cash_value)
                 row_data.append(total_saving)
@@ -90,7 +102,7 @@ class Fond:
 
     def solver_irr(self, ncf):
         func = lambda r: Fond.weighted_cashflow(ncf, r) - self.initial_investment
-        sum = reduce(lambda x, y: abs(y) + x, ncf[:-1],0)
+        sum = reduce(lambda x, y: abs(y) + x, ncf[:-1], 0)
         if sum > ncf[-1]:
             irr_initial_guess = 0.9
         else:
@@ -98,12 +110,13 @@ class Fond:
         irr_solution = fsolve(func, np.array([irr_initial_guess], np.double))
         return irr_solution[0]
 
-    def calc_avg_interest(self):
-        self.load_sheet()
+    def time_weighted_rate_of_return(self):
+        pass
+
+    def calc_internal_rate_of_return(self):
         for i in range(len(self.net_cash_flows)):
-            ncf = list(self.net_cash_flows[:i+1])
-            ncf[-1] = self.rows[i][1] # cash out, equals the total portfolio value for that year
-            print(f"cash-flow-out/total value for year {i+1}: {ncf[-1]}")
+            ncf = list(self.net_cash_flows[:i + 1])
+            ncf[-1] = self.rows[i][1]  # cash out, equals the portfolio value before the saving
             if self.rows[i][3] == self.rows[i][2]:
                 interest = 0
             else:
@@ -144,18 +157,39 @@ class Fond:
                 writer.writerow(row_data)
 
     def calculate(self):
-        fond.calc_avg_interest()
+        self.load_sheet()
+        self.calc_internal_rate_of_return()
+        self.time_weighted_rate_of_return()
         current_interest = self.interests[-1]
         print("Current internal rate of return: " + '{:.5f}'.format(current_interest))
-        portfolio = self.consistency_check()
-        print("Plausibility analysis, current portfolio value assumung this constant interest: " + '{:.5f}'.format(portfolio))
+        if self.consistency_check():
+            return current_interest
+        else:
+            return None
 
     def consistency_check(self):
         interest = self.interests[-1]
-        portfolio = self.initial_investment
-        for row in self.rows:
-            portfolio = portfolio * (interest + 1) + row[0]
-        return portfolio
+        if self.early_booking:
+            portfolio = self.initial_investment * (1 + interest)
+            years_counting = 1
+        else:
+            portfolio = self.initial_investment
+            years_counting = 0
+        for row in self.rows[years_counting:]:
+            if self.early_booking:
+                portfolio = (portfolio + row[0]) * (1 + interest)
+            else:
+                portfolio = portfolio * (interest + 1) + row[0]
+        real_portfolio = self.rows[-1][1]
+        ratio =  real_portfolio/portfolio
+        return ratio < 1.01 and ratio > 0.99
+
+
+def run(fond):
+    return fond.calculate()
+    # fond.project(dynamic_factor, years)
+    # fond.save_results()
+
 
 top_package_dir = osp.dirname(osp.abspath(__file__))
 properties_path = osp.join(top_package_dir, 'parameters.cfg')
@@ -171,11 +205,12 @@ dynamic_factor = configParser.get('parameters', 'dynamic_factor', fallback=None)
 if not dynamic_factor:
     percent = input("What is the yearly increase of the savings in per cent? (e.g. 5 %): ")
     print()
-    dynamic_factor = 1 + float(percent)/100
+    dynamic_factor = 1 + float(percent) / 100
 else:
     dynamic_factor = float(dynamic_factor)
 
-fond = Fond(configParser.get('parameters', 'chartname', fallback=""))
-fond.calculate()
-#fond.project(dynamic_factor, years)
-fond.save_results()
+chartname = configParser.get('parameters', 'chartname', fallback="")
+fond = Fond(chartname, early_booking=False)
+run(fond)
+# fond2 = Fond(chartname, early_booking=True)
+# run(fond2)
