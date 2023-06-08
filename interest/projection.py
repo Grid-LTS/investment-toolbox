@@ -1,4 +1,5 @@
 import csv
+import math
 import os.path as osp
 from functools import reduce
 
@@ -74,6 +75,10 @@ class Fond:
                         net_cash_flow = - float(readings[index + 1]['saving'])
                     else:
                         net_cash_flow = - saving
+                else:
+                    # has now meaning,
+                    # the last cash flow entry will correspond to last portfolio value (minus saving)
+                    net_cash_flow = 0
                 row_data.append(saving)
                 self.net_cash_flows.append(net_cash_flow)
                 row_data.append(cash_value)
@@ -111,7 +116,22 @@ class Fond:
         return irr_solution[0]
 
     def time_weighted_rate_of_return(self):
-        pass
+        twror = 1
+        pf_value = self.rows[0][-1] - self.rows[0][0]
+        count = 1
+        while pf_value == 0:
+            pf_value = self.rows[count][-1] - self.rows[count][0]
+            count += 1
+        prev_portfolio_val = self.rows[count - 1][-1]
+        for ind, row in enumerate(self.rows[count:]):
+            pf_value_new = row[-1] - row[0]
+            ret = pf_value_new / prev_portfolio_val
+            twror = ret * twror
+            prev_portfolio_val = row[-1]
+            twrory = math.pow(twror, 1 / (ind + 1))
+            self.interests.append(twrory)
+        print("Current time-weighted rate of return: " + '{:.5f}'.format(self.interests[-1]))
+        return self.interests[-1]
 
     def calc_internal_rate_of_return(self):
         for i in range(len(self.net_cash_flows)):
@@ -123,6 +143,14 @@ class Fond:
                 interest = np.round(self.solver_irr(ncf), DECIMAL_PRECISION).item() - 1
             self.rows[i].append(interest)
             self.interests.append(interest)
+        logline = "Current internal rate of return"
+        if self.early_booking:
+            logline = logline + " with early booking"
+        if self.irr_consistency_check():
+            print(f"{logline}: " + '{:.5f}'.format(self.interests[-1]))
+            return self.interests[-1]
+        else:
+            return None
 
     def save_results(self):
         headers = ['interest']
@@ -133,41 +161,46 @@ class Fond:
             for interest in self.interests:
                 write_sheet.write('{:.4f}'.format(interest) + "\n")
 
-    def project(self, dynamic_factor, years):
+    def project_zinsZins(self, dynamic_factor, years):
+        # round(Fond.zinsZins(self.invested, r)
+        pass
+
+    def project_irr(self, dynamic_factor, years):
         interest = self.interests[-1]
-        total_eingezahlt = self.rows[-1][-1]
-        yearly_rate = self.rows[-1][0]
-        r = interest + 1
+        formula = lambda saving, pf: self.calculate_pf_after_year(pf, interest, saving)
+        self.project(dynamic_factor, years, formula)
+
+    def project(self, dynamic_factor, years, formula):
+        interest = self.interests[-1]
+        total_eingezahlt = self.rows[-1][2]
+        invest = self.rows[-1][0]
+        portfolio = self.rows[-1][-2]
         data_file_path = osp.join(self.filedir, f"Projected-{self.current_year}-{'{:.5f}'.format(interest)}.csv")
         with open(data_file_path, 'w', encoding='UTF8') as f:
             writer = csv.writer(f)
-            header = ['saving', 'total_value', 'total_savings']
-            row_data = [yearly_rate, round(Fond.zinsZins(self.invested, r), 2), round(total_eingezahlt, 2)]
+            header = ['year', 'saving', 'total_value', 'total_savings']
+            row_data = [self.current_year, invest, portfolio, self.rows[-1][2]]
             self.projected.append(row_data)
             writer.writerow(header)
             writer.writerow(row_data)
+            year = self.current_year
             for i in range(years):
-                yearly_rate = round(yearly_rate * dynamic_factor, 2)
-                invest = round(yearly_rate, 2)
+                invest = round(invest * dynamic_factor, 3)
                 total_eingezahlt += invest
-                row_data = [invest]
+                year += 1
+                row_data = [year, invest]
                 self.invested.append(invest)
-                row_data.append(round(Fond.zinsZins(self.invested, r), 2))
+                portfolio = formula(invest, portfolio)
+                row_data.append(round(portfolio, 2))
                 row_data.append(round(total_eingezahlt, 2))
                 writer.writerow(row_data)
 
     def calculate(self):
         self.load_sheet()
         self.calc_internal_rate_of_return()
-        self.time_weighted_rate_of_return()
-        current_interest = self.interests[-1]
-        print("Current internal rate of return: " + '{:.5f}'.format(current_interest))
-        if self.consistency_check():
-            return current_interest
-        else:
-            return None
+        # interest = self.time_weighted_rate_of_return()
 
-    def consistency_check(self):
+    def irr_consistency_check(self):
         interest = self.interests[-1]
         if self.early_booking:
             portfolio = self.initial_investment * (1 + interest)
@@ -176,19 +209,25 @@ class Fond:
             portfolio = self.initial_investment
             years_counting = 0
         for row in self.rows[years_counting:]:
-            if self.early_booking:
-                portfolio = (portfolio + row[0]) * (1 + interest)
-            else:
-                portfolio = portfolio * (interest + 1) + row[0]
-        real_portfolio = self.rows[-1][1]
-        ratio =  real_portfolio/portfolio
-        return ratio < 1.01 and ratio > 0.99
+            portfolio = self.calculate_pf_after_year(portfolio, interest, row[0])
+        real_portfolio = self.rows[-1][-2]
+        ratio = real_portfolio / portfolio
+        return 1.01 > ratio > 0.99
+
+    def calculate_pf_after_year(self, pf_before, interest, savings):
+        if self.early_booking:
+            # row[0] = accumulated savings of the year
+            return (pf_before + savings) * (1 + interest)
+        else:
+            return pf_before * (interest + 1) + savings
 
 
-def run(fond):
-    return fond.calculate()
-    # fond.project(dynamic_factor, years)
-    # fond.save_results()
+def run_irr(fund, export=False, project=False):
+    fund.calculate()
+    if project:
+        fund.project_irr(dynamic_factor, years)
+    if export:
+        fund.save_results()
 
 
 top_package_dir = osp.dirname(osp.abspath(__file__))
@@ -211,6 +250,6 @@ else:
 
 chartname = configParser.get('parameters', 'chartname', fallback="")
 fond = Fond(chartname, early_booking=False)
-run(fond)
-# fond2 = Fond(chartname, early_booking=True)
-# run(fond2)
+run_irr(fond, export=True, project=True)
+fond2 = Fond(chartname, early_booking=True)
+run_irr(fond2)
